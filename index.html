@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Проверка перед входом</title>
+<!-- Страница проверки для бота «Старший по чату».
+
+     Она статическая: своего сервера здесь нет и не нужно. Порядок такой:
+       1. бот открывает эту страницу кнопкой в личке;
+       2. площадка (Cloudflare Turnstile или hCaptcha) выдаёт токен;
+       3. страница отдаёт токен боту методом sendData — обычным сообщением;
+       4. бот сам спрашивает у площадки, настоящий ли токен.
+     Поэтому здесь лежит только ПУБЛИЧНЫЙ ключ. Секретный живёт в .env
+     рядом с ботом и сюда попадать не должен никогда.
+
+     Что поправить перед выкладкой — две строки ниже. -->
+<script>
+  // ── ЧТО ПОМЕНЯТЬ ───────────────────────────────────────────────────
+  // 1. Публичный ключ площадки (Site key).
+  var SITE_KEY = 'ВСТАВЬТЕ_ПУБЛИЧНЫЙ_КЛЮЧ';
+  // 2. Какая площадка: 'turnstile' или 'hcaptcha'. Должно совпадать с
+  //    CAPTCHA_APP_PROVIDER в .env у бота.
+  var PROVIDER = 'turnstile';
+  // ───────────────────────────────────────────────────────────────────
+</script>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1c1c1e; --muted: #6b6b70;
+    --card: #f4f4f6; --line: #e3e3e8; --ok: #1f9d55; --bad: #c8342b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17212b; --fg: #f1f1f1; --muted: #9aa7b4;
+      --card: #1f2c38; --line: #2b3a49; --ok: #4bbf7a; --bad: #e56a60;
+    }
+  }
+  /* Telegram подставляет свою тему переменными — она главнее нашей догадки. */
+  body {
+    margin: 0; padding: 24px 16px;
+    background: var(--tg-theme-bg-color, var(--bg));
+    color: var(--tg-theme-text-color, var(--fg));
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    width: 100%; max-width: 380px; text-align: center;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p.hint {
+    margin: 0 0 24px; font-size: 15px;
+    color: var(--tg-theme-hint-color, var(--muted));
+  }
+  .box {
+    display: flex; justify-content: center; min-height: 78px;
+    margin-bottom: 20px;
+  }
+  .state { font-size: 15px; min-height: 24px; }
+  .state.ok { color: var(--ok); }
+  .state.bad { color: var(--bad); }
+  .setup {
+    text-align: left; background: var(--card);
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; font-size: 14px;
+  }
+  .setup code {
+    background: rgba(127, 127, 127, .18); border-radius: 4px;
+    padding: 1px 5px; font-size: 13px;
+  }
+  .setup b { display: block; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🔐 Проверка перед входом</h1>
+  <p class="hint" id="hint">Подтвердите, что вы не робот — и бот впустит вас в чат.</p>
+  <div class="box" id="box"></div>
+  <div class="state" id="state"></div>
+</div>
+
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var box = document.getElementById('box');
+  var state = document.getElementById('state');
+  var hint = document.getElementById('hint');
+  var params = new URLSearchParams(location.search);
+  var chatId = params.get('chat') || '';
+
+  if (tg) { tg.ready(); tg.expand(); }
+
+  function say(text, cls) {
+    state.textContent = text;
+    state.className = 'state' + (cls ? ' ' + cls : '');
+  }
+
+  // Ключ не подставили — объясняем это здесь, а не оставляем пустой экран:
+  // иначе человек видит белый лист и думает, что чат сломан.
+  if (!SITE_KEY || SITE_KEY.indexOf('ВСТАВЬТЕ') === 0) {
+    hint.textContent = '';
+    box.innerHTML = '<div class="setup"><b>⚙️ Страница ещё не настроена</b>' +
+      'В файле <code>index.html</code> впишите публичный ключ площадки в ' +
+      '<code>SITE_KEY</code>, а секретный — в <code>CAPTCHA_APP_SECRET</code> ' +
+      'в <code>.env</code> у бота. Подробно — в ' +
+      '<code>КАПЧА_ПРИЛОЖЕНИЕ_RU.txt</code>.</div>';
+    return;
+  }
+  if (!chatId) {
+    say('Ссылка открыта не из бота. Вернитесь в чат с ботом и нажмите кнопку проверки.', 'bad');
+    return;
+  }
+
+  // Результат уходит боту обычным сообщением. sendData работает только для
+  // кнопки обычной клавиатуры — бот именно такую и присылает.
+  function done(token) {
+    say('✅ Проверка пройдена, возвращаемся…', 'ok');
+    var payload = JSON.stringify({ chat: Number(chatId), token: token });
+    if (tg && tg.sendData) {
+      tg.sendData(payload);           // закрывает страницу сам
+    } else {
+      say('Откройте проверку из чата с ботом — иначе ответ не дойдёт.', 'bad');
+    }
+  }
+
+  function failed() {
+    say('Проверка не пройдена. Попробуйте ещё раз.', 'bad');
+  }
+
+  var holder = document.createElement('div');
+  box.appendChild(holder);
+
+  window.onCaptchaReady = function () {
+    try {
+      if (PROVIDER === 'hcaptcha') {
+        hcaptcha.render(holder, {
+          sitekey: SITE_KEY, theme: (tg && tg.colorScheme) || 'light',
+          callback: done, 'error-callback': failed, 'expired-callback': failed
+        });
+      } else {
+        turnstile.render(holder, {
+          sitekey: SITE_KEY, theme: (tg && tg.colorScheme) || 'auto',
+          callback: done, 'error-callback': failed, 'expired-callback': failed
+        });
+      }
+    } catch (e) {
+      say('Не удалось загрузить проверку: ' + e.message, 'bad');
+    }
+  };
+
+  var script = document.createElement('script');
+  script.async = true;
+  script.defer = true;
+  script.src = (PROVIDER === 'hcaptcha')
+    ? 'https://js.hcaptcha.com/1/api.js?onload=onCaptchaReady&render=explicit'
+    : 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onCaptchaReady&render=explicit';
+  script.onerror = function () {
+    say('Проверка не загрузилась — похоже, нет связи. Попробуйте ещё раз.', 'bad');
+  };
+  document.head.appendChild(script);
+})();
+</script>
+</body>
+</html>
