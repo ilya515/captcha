@@ -70,6 +70,9 @@
     padding: 1px 5px; font-size: 13px;
   }
   .setup b { display: block; margin-bottom: 8px; }
+  .back { display: block; margin: 18px auto 0; max-width: 320px; padding: 14px 18px;
+          border-radius: 12px; background: #2ea6ff; color: #fff; font-weight: 600;
+          text-align: center; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -81,6 +84,9 @@
 </div>
 
 <script>
+// Имя вашего бота без @ — нужно для входа по прямой ссылке на приложение.
+// Для остальных видов проверки заполнять не обязательно.
+var BOT_NAME = 'moderatosina_bot';
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
   var box = document.getElementById('box');
@@ -88,6 +94,30 @@
   var hint = document.getElementById('hint');
   var params = new URLSearchParams(location.search);
   var chatId = params.get('chat') || '';
+  // Кто нас открыл и какая это проверка. Нужно для возврата, когда страницу
+  // открыли кнопкой под сообщением: sendData там не работает, и ответ
+  // приходится отдавать ссылкой обратно в бота.
+  var botName = params.get('bot') || '';
+  var cid = params.get('cid') || '';
+  // Вход по прямой ссылке на приложение: чат и бот приходят не в адресе
+  // страницы, а из самого Telegram — он передаёт их в start_param.
+  var startParam = '';
+  try {
+    startParam = (window.Telegram && window.Telegram.WebApp &&
+                  window.Telegram.WebApp.initDataUnsafe &&
+                  window.Telegram.WebApp.initDataUnsafe.start_param) || '';
+  } catch (e) {}
+  var entryChat = '';
+  if (/^c\d+$/.test(startParam)) {
+    entryChat = startParam.slice(1);
+    if (!chatId) { chatId = '-' + entryChat; }
+  }
+  // Приложение открыли кнопкой проверки: в start_param пришёл номер самой
+  // проверки. Тогда после капчи возвращаемся в бота именно с ним.
+  if (/^k\d+$/.test(startParam) && !cid) {
+    cid = startParam.slice(1);
+    if (!chatId) { chatId = 'app'; }
+  }
 
   if (tg) { tg.ready(); tg.expand(); }
 
@@ -107,7 +137,7 @@
       '<code>КАПЧА_ПРИЛОЖЕНИЕ_RU.txt</code>.</div>';
     return;
   }
-  if (!chatId) {
+  if (!chatId && !entryChat) {
     say('Ссылка открыта не из бота. Вернитесь в чат с ботом и нажмите кнопку проверки.', 'bad');
     return;
   }
@@ -117,10 +147,40 @@
   function done(token) {
     say('✅ Проверка пройдена, возвращаемся…', 'ok');
     var payload = JSON.stringify({ chat: Number(chatId), token: token });
+    // Путь первый: страницу открыли кнопкой обычной клавиатуры. Тогда токен
+    // уходит боту сообщением, и площадка подтверждает его по-настоящему.
     if (tg && tg.sendData) {
-      tg.sendData(payload);           // закрывает страницу сам
+      try { tg.sendData(payload); return; } catch (e) {}
+    }
+    // Путь третий: вход по прямой ссылке на приложение. Заявки нет вовсе —
+    // бот выдаст разовое приглашение в чат.
+    if (entryChat) {
+      backTo((botName ? botName : BOT_NAME) + '?start=join_c' + entryChat, 'Войти в чат');
+      return;
+    }
+    // Путь второй: кнопка была под сообщением. sendData там не работает, и
+    // ответ возвращается ссылкой в бота — она же закрывает страницу.
+    if (cid) {
+      backTo((botName || BOT_NAME) + '?start=capok_' + cid, 'Вернуться к боту');
+      return;
+    }
+    say('Откройте проверку из чата с ботом — иначе ответ не дойдёт.', 'bad');
+  }
+
+  // Возврат в бота: одной кнопкой и попыткой уйти туда самому. Одно место
+  // на оба случая — и кнопку под сообщением, и прямую ссылку.
+  function backTo(tail, label) {
+    var back = 'https://t.me/' + tail;
+    var link = document.createElement('a');
+    link.href = back;
+    link.className = 'back';
+    link.textContent = '✅ ' + label;
+    box.appendChild(link);
+    hint.textContent = 'Если ничего не произошло — нажмите кнопку выше.';
+    if (tg && tg.openTelegramLink) {
+      setTimeout(function () { try { tg.openTelegramLink(back); } catch (e) {} }, 400);
     } else {
-      say('Откройте проверку из чата с ботом — иначе ответ не дойдёт.', 'bad');
+      setTimeout(function () { location.href = back; }, 400);
     }
   }
 
