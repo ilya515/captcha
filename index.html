@@ -22,6 +22,12 @@
   // 2. Какая площадка: 'turnstile' или 'hcaptcha'. Должно совпадать с
   //    CAPTCHA_APP_PROVIDER в .env у бота.
   var PROVIDER = 'turnstile';
+  // 3. Второй уровень — как у group help: вместо галочки головоломка с
+  //    картинками. Площадка другая, значит и ключ другой. Заводится на
+  //    dashboard.hcaptcha.com, бесплатно. Пусто — второй уровень просто
+  //    не включится, первый будет работать как работал.
+  var SITE_KEY_2 = '0x4AAAAAAE5L8M40Ix24rsI_XjgWtiYBTvU';
+  var PROVIDER_2 = 'hcaptcha';
   // ───────────────────────────────────────────────────────────────────
 </script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -99,6 +105,17 @@ var BOT_NAME = 'moderatosina_bot';
   // приходится отдавать ссылкой обратно в бота.
   var botName = params.get('bot') || '';
   var cid = params.get('cid') || '';
+  // Проверка открыта прямо из кнопки «Подать заявку». Тогда у нас есть билет
+  // заявки и адрес, куда вернуть ответ: sendData здесь не работает — кнопки
+  // клавиатуры нет вовсе, приложение открыл сам Telegram.
+  var jr = params.get('jr') || '';
+  var api = params.get('api') || '';
+  // Уровень проверки выбирает бот и пишет в адрес. Ключи у площадок разные,
+  // поэтому подменяем и ключ, и площадку — страница при этом остаётся одна.
+  if (params.get('lvl') === '2' && SITE_KEY_2) {
+    SITE_KEY = SITE_KEY_2;
+    PROVIDER = PROVIDER_2;
+  }
   // Вход по прямой ссылке на приложение: чат и бот приходят не в адресе
   // страницы, а из самого Telegram — он передаёт их в start_param.
   var startParam = '';
@@ -137,7 +154,7 @@ var BOT_NAME = 'moderatosina_bot';
       '<code>КАПЧА_ПРИЛОЖЕНИЕ_RU.txt</code>.</div>';
     return;
   }
-  if (!chatId && !entryChat) {
+  if (!chatId && !entryChat && !jr) {
     say('Ссылка открыта не из бота. Вернитесь в чат с ботом и нажмите кнопку проверки.', 'bad');
     return;
   }
@@ -147,6 +164,13 @@ var BOT_NAME = 'moderatosina_bot';
   function done(token) {
     say('✅ Проверка пройдена, возвращаемся…', 'ok');
     var payload = JSON.stringify({ chat: Number(chatId), token: token });
+    // Путь нулевой, самый короткий: заявка на вступление. Ответ уходит боту
+    // напрямую, и заявка одобряется прямо здесь — человек даже не выходит
+    // из группы. Подпись Telegram шлём как есть: бот проверит её сам.
+    if (jr && api) {
+      sendToBot(token);
+      return;
+    }
     // Путь первый: страницу открыли кнопкой обычной клавиатуры. Тогда токен
     // уходит боту сообщением, и площадка подтверждает его по-настоящему.
     if (tg && tg.sendData) {
@@ -167,6 +191,47 @@ var BOT_NAME = 'moderatosina_bot';
     say('Откройте проверку из чата с ботом — иначе ответ не дойдёт.', 'bad');
   }
 
+  // Ответ боту напрямую, минуя Telegram. Нужен только для заявок: там
+  // приложение открывает сам Telegram, и обратного канала через него нет.
+  function sendToBot(token) {
+    var initData = '';
+    try { initData = (tg && tg.initData) || ''; } catch (e) {}
+    var req = new XMLHttpRequest();
+    req.open('POST', api.replace(/\/+$/, '') + '/jr/done', true);
+    req.setRequestHeader('Content-Type', 'application/json');
+    req.timeout = 15000;
+    req.onload = function () {
+      var ok = false, error = '';
+      try {
+        var body = JSON.parse(req.responseText || '{}');
+        ok = !!body.ok; error = String(body.error || '');
+      } catch (e) {}
+      if (ok) {
+        say('✅ Готово, вы в чате.', 'ok');
+        setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
+        return;
+      }
+      // Разные беды — разные подсказки. «expired» человек лечит сам, всё
+      // остальное лечит владелец чата, и ему нужен код.
+      if (error === 'expired') {
+        say('Проверка устарела. Подайте заявку ещё раз.', 'bad');
+      } else if (error === 'captcha') {
+        say('Проверка не пройдена. Попробуйте ещё раз.', 'bad');
+      } else {
+        say('Ответ не принят' + (error ? ' (' + error + ')' : '') +
+            '. Напишите администратору чата.', 'bad');
+      }
+    };
+    req.onerror = req.ontimeout = function () {
+      say('Бот сейчас недоступен — заявка осталась, администратор её увидит.', 'bad');
+    };
+    try {
+      req.send(JSON.stringify({ jr: jr, token: token, initData: initData }));
+    } catch (e) {
+      say('Отправить ответ не вышло. Напишите администратору чата.', 'bad');
+    }
+  }
+
   // Возврат в бота: одной кнопкой и попыткой уйти туда самому. Одно место
   // на оба случая — и кнопку под сообщением, и прямую ссылку.
   function backTo(tail, label) {
@@ -184,12 +249,40 @@ var BOT_NAME = 'moderatosina_bot';
     }
   }
 
-  function failed() {
-    say('Проверка не пройдена. Попробуйте ещё раз.', 'bad');
+  function failed(code) {
+    // Turnstile передаёт код ошибки. Коды 1100х — это отказ по настройке
+    // (чаще всего домен), а не «человек не прошёл». Разные беды — разные
+    // подсказки, иначе владелец чата ищет проблему не там.
+    var c = String(code || '');
+    if (c.indexOf('1100') === 0 || c.indexOf('1101') === 0 || c.indexOf('1102') === 0) {
+      say('Проверка отклонена настройкой. В Cloudflare у виджета должен быть '
+          + 'разрешён домен ' + location.hostname + ' — проверьте поле Domain. '
+          + 'Код: ' + c, 'bad');
+      return;
+    }
+    say('Проверка не пройдена. Попробуйте ещё раз.' + (c ? ' Код: ' + c : ''), 'bad');
   }
+
 
   var holder = document.createElement('div');
   box.appendChild(holder);
+
+  // Сторож. Если за восемь секунд виджет не нарисовался и ни одна ошибка не
+  // пришла — человек смотрит в пустоту и не понимает, чего от него хотят.
+  // Молчащая страница хуже честной надписи: по ней нечего и починить.
+  var appeared = false;
+  function alive() { appeared = true; }
+  setTimeout(function () {
+    if (appeared) return;
+    var h = holder && holder.querySelector('iframe');
+    if (h) return;
+    say('Проверка не появилась за 8 секунд.\n\n'
+        + 'Что проверить владельцу чата:\n'
+        + '1. В Cloudflare → Turnstile → виджет → поле Domain должен быть '
+        + location.hostname + '\n'
+        + '2. Ключ на странице и виджет в Cloudflare — одни и те же\n\n'
+        + 'Страница открыта с ' + location.hostname, 'bad');
+  }, 8000);
 
   window.onCaptchaReady = function () {
     try {
@@ -198,11 +291,14 @@ var BOT_NAME = 'moderatosina_bot';
           sitekey: SITE_KEY, theme: (tg && tg.colorScheme) || 'light',
           callback: done, 'error-callback': failed, 'expired-callback': failed
         });
+        alive();
       } else {
         turnstile.render(holder, {
           sitekey: SITE_KEY, theme: (tg && tg.colorScheme) || 'auto',
-          callback: done, 'error-callback': failed, 'expired-callback': failed
+          callback: done, 'error-callback': failed, 'expired-callback': failed,
+          'before-interactive-callback': alive, 'after-interactive-callback': alive
         });
+        alive();
       }
     } catch (e) {
       say('Не удалось загрузить проверку: ' + e.message, 'bad');
