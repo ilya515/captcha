@@ -112,7 +112,8 @@ var BOT_NAME = 'moderatosina_bot';
   var api = params.get('api') || '';
   // Уровень проверки выбирает бот и пишет в адрес. Ключи у площадок разные,
   // поэтому подменяем и ключ, и площадку — страница при этом остаётся одна.
-  if (params.get('lvl') === '2' && SITE_KEY_2) {
+  var wantLevel2 = params.get('lvl') === '2';
+  if (wantLevel2 && SITE_KEY_2) {
     SITE_KEY = SITE_KEY_2;
     PROVIDER = PROVIDER_2;
   }
@@ -145,6 +146,22 @@ var BOT_NAME = 'moderatosina_bot';
 
   // Ключ не подставили — объясняем это здесь, а не оставляем пустой экран:
   // иначе человек видит белый лист и думает, что чат сломан.
+  // Бот просил второй уровень, а ключа для него нет. Молча показать первый —
+  // худшее, что можно сделать: владелец чата выбрал вид проверки, видит
+  // другой и не понимает, почему настройка не сработала. Говорим прямо.
+  if (wantLevel2 && !SITE_KEY_2) {
+    hint.textContent = '';
+    box.innerHTML = '<div class="setup"><b>⚙️ Уровень 2 ещё не настроен</b>' +
+      'В боте выбран вид «🧠 Приложением · уровень 2», но на этой странице ' +
+      'пустая строка <code>SITE_KEY_2</code>. Впишите туда <b>Site key</b> ' +
+      'с <code>dashboard.hcaptcha.com</code> — там же в поле Hostnames должен ' +
+      'стоять <code>' + location.hostname + '</code>.<br><br>' +
+      'Секретный ключ оттуда же идёт в <code>.env</code> строкой ' +
+      '<code>CAPTCHA_APP2_SECRET</code> и на страницу попадать не должен ' +
+      'никогда.<br><br>Пока ключа нет — переключите чат обратно на ' +
+      '«🧩 Приложением · уровень 1».</div>';
+    return;
+  }
   if (!SITE_KEY || SITE_KEY.indexOf('ВСТАВЬТЕ') === 0) {
     hint.textContent = '';
     box.innerHTML = '<div class="setup"><b>⚙️ Страница ещё не настроена</b>' +
