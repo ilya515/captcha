@@ -218,7 +218,15 @@ var BOT_NAME = 'moderatosina_bot';
     // Путь нулевой, самый короткий: заявка на вступление. Ответ уходит боту
     // напрямую, и заявка одобряется прямо здесь — человек даже не выходит
     // из группы. Подпись Telegram шлём как есть: бот проверит её сам.
-    if (jr && api) {
+    // Для заявки — всегда сюда, есть обратный адрес или нет. Внутри разберётся:
+    // адрес есть — постучится напрямую, нет — вернёт человека в бота ссылкой.
+    //
+    // Раньше условие было «jr И адрес», и без адреса заявка проваливалась
+    // ниже, к tg.sendData. А sendData у приложения, открытого самим Telegram
+    // из кнопки «Подать заявку», не работает: клавиатурной кнопки нет вовсе.
+    // Исключения он при этом не бросает — страница отвечала «проверка
+    // пройдена» и замирала навсегда.
+    if (jr) {
       sendToBot(token);
       return;
     }
@@ -245,6 +253,11 @@ var BOT_NAME = 'moderatosina_bot';
   // Ответ боту напрямую, минуя Telegram. Нужен только для заявок: там
   // приложение открывает сам Telegram, и обратного канала через него нет.
   function sendToBot(token) {
+    // Обратного адреса нет вовсе — стучаться некуда, и притворяться незачем.
+    // Раньше запрос всё равно уходил: на пустом адресе он превращался в
+    // запрос к самой странице, ждал ответа, получал 404 и только тогда
+    // сдавался. Секунды ожидания на ровном месте. Сразу вторым путём.
+    if (!api) { goToBot(); return; }
     var initData = '';
     try { initData = (tg && tg.initData) || ''; } catch (e) {}
     var req = new XMLHttpRequest();
@@ -434,9 +447,9 @@ var BOT_NAME = 'moderatosina_bot';
     var ready = 'onCaptchaReady' + stepAt;
     window[ready] = function () {
       try {
-        var api = (step.kind === 'hcaptcha') ? window.hcaptcha : window.turnstile;
-        if (!api) { nextStep('нет объекта площадки'); return; }
-        api.render(holder, {
+        var widget = (step.kind === 'hcaptcha') ? window.hcaptcha : window.turnstile;
+        if (!widget) { nextStep('нет объекта площадки'); return; }
+        widget.render(holder, {
           sitekey: step.key,
           theme: (tg && tg.colorScheme) || (step.kind === 'hcaptcha' ? 'light' : 'auto'),
           callback: function (token) { settled = true; done(token); },
