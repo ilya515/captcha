@@ -113,6 +113,13 @@ var BOT_NAME = 'moderatosina_bot';
   // Уровень проверки выбирает бот и пишет в адрес. Ключи у площадок разные,
   // поэтому подменяем и ключ, и площадку — страница при этом остаётся одна.
   var wantLevel2 = params.get('lvl') === '2';
+  // Уровень 0: ни Cloudflare, ни hCaptcha — одна своя кнопка. Грузиться
+  // нечему, значит и не загрузиться нечему: живой человек проходит всегда.
+  // Подлинность подтверждает сам Telegram подписью, её проверяет бот.
+  var selfOnly = params.get('lvl') === '0';
+  // Ключ первой площадки запоминаем отдельно: если выбран уровень 2, SITE_KEY
+  // подменяется на ключ hCaptcha, а для лестницы нужен и первый.
+  var SITE_KEY_MAIN = SITE_KEY;
   if (wantLevel2 && SITE_KEY_2) {
     SITE_KEY = SITE_KEY_2;
     PROVIDER = PROVIDER_2;
@@ -139,9 +146,32 @@ var BOT_NAME = 'moderatosina_bot';
 
   if (tg) { tg.ready(); tg.expand(); }
 
+  // Любая беда на этой странице кончается одинаково: человек не понимает, что
+  // делать. Поэтому выход показывается сам — при каждой ошибке, какой бы она
+  // ни была. Одно место вместо пятнадцати, и забыть его негде.
+  var escapeShown = false;
+
   function say(text, cls) {
     state.textContent = text;
     state.className = 'state' + (cls ? ' ' + cls : '');
+    if (cls === 'bad') { showEscape(); }
+  }
+
+  function showEscape(label) {
+    if (escapeShown) { return; }
+    var name = botName || BOT_NAME;
+    if (!name) { return; }
+    escapeShown = true;
+    var link = document.createElement('a');
+    link.className = 'back';
+    link.href = 'https://t.me/' + name + (cid ? '?start=capok_' + cid : '');
+    link.textContent = label || ('💬 Перейти к боту @' + name + ' в личку');
+    box.appendChild(link);
+    var tail = document.createElement('div');
+    tail.className = 'setup';
+    tail.textContent = 'Нажмите кнопку выше — бот примет проверку в личных '
+        + 'сообщениях, и вы попадёте в чат. Заявка при этом никуда не делась.';
+    box.appendChild(tail);
   }
 
   // Ключ не подставили — объясняем это здесь, а не оставляем пустой экран:
@@ -152,6 +182,19 @@ var BOT_NAME = 'moderatosina_bot';
   // тот вид, который выбрал, и ищет поломку там, где её нет. Поэтому внизу
   // подписываем, что подменили и почему.
   var level2Missing = wantLevel2 && !SITE_KEY_2;
+  if (selfOnly) {
+    var mine = document.createElement('button');
+    mine.className = 'back';
+    mine.textContent = '✅ Я не робот';
+    mine.onclick = function () {
+      mine.disabled = true;
+      mine.textContent = 'Проверяем…';
+      done('self');
+    };
+    box.appendChild(mine);
+    hint.textContent = 'Одно нажатие — и бот впустит вас в чат.';
+    return;
+  }
   if (!SITE_KEY || SITE_KEY.indexOf('ВСТАВЬТЕ') === 0) {
     hint.textContent = '';
     box.innerHTML = '<div class="setup"><b>⚙️ Страница ещё не настроена</b>' +
@@ -266,15 +309,17 @@ var BOT_NAME = 'moderatosina_bot';
     }
   }
 
-  function failed(code) {
+  function failed(code) {   // оставлено для старых путей возврата
     // Turnstile передаёт код ошибки. Коды 1100х — это отказ по настройке
     // (чаще всего домен), а не «человек не прошёл». Разные беды — разные
     // подсказки, иначе владелец чата ищет проблему не там.
     var c = String(code || '');
     if (c.indexOf('1100') === 0 || c.indexOf('1101') === 0 || c.indexOf('1102') === 0) {
-      say('Проверка отклонена настройкой. В Cloudflare у виджета должен быть '
-          + 'разрешён домен ' + location.hostname + ' — проверьте поле Domain. '
-          + 'Код: ' + c, 'bad');
+      say('Проверка отклонена настройкой площадки — вы тут ни при чём. '
+          + 'Пройдите её у бота в личных сообщениях, кнопка ниже.', 'bad');
+      hint.innerHTML = 'Владельцу чата: в Cloudflare у виджета должен быть '
+          + 'разрешён домен <code>' + location.hostname + '</code> — поле '
+          + 'Domain. Код: ' + c;
       return;
     }
     say('Проверка не пройдена. Попробуйте ещё раз.' + (c ? ' Код: ' + c : ''), 'bad');
@@ -284,69 +329,118 @@ var BOT_NAME = 'moderatosina_bot';
   var holder = document.createElement('div');
   box.appendChild(holder);
 
-  if (level2Missing) {
-    var note = document.createElement('div');
-    note.className = 'setup';
-    note.innerHTML = '<b>ℹ️ Показан уровень 1</b>' +
-      'В боте выбран «уровень 2», но на этой странице пустая строка ' +
-      '<code>SITE_KEY_2</code> — ключа второй площадки нет, поэтому ' +
-      'автоматически поставлен первый уровень. Проверка рабочая, входить можно.' +
-      '<br><br>Чтобы заработал второй: <b>Site key</b> с ' +
-      '<code>dashboard.hcaptcha.com</code> → в <code>SITE_KEY_2</code>, ' +
-      '<b>Secret key</b> → в <code>.env</code> строкой ' +
-      '<code>CAPTCHA_APP2_SECRET</code>. В Hostnames у площадки должен стоять ' +
-      '<code>' + location.hostname + '</code>.';
-    box.appendChild(note);
+  // ── Лестница проверок ───────────────────────────────────────────────
+  //
+  // У виджетов Cloudflare и hCaptcha один общий изъян: они грузятся с чужих
+  // серверов. Не загрузился — и живой человек стоит перед пустым местом, а
+  // виноватым выглядит чат. Поэтому не одна проверка, а лестница: не вышло —
+  // пробуем следующую, и так до той, которой грузить нечего.
+  //
+  //   1. та площадка, что выбрана в боте
+  //   2. вторая площадка (у них разные сети и блокируют их по-разному)
+  //   3. своя кнопка: ничего не грузится, подпись даёт сам Telegram
+  //   4. и всегда на виду — кнопка «пройти у бота в личке»
+  //
+  // Каждой ступени даётся восемь секунд. Дольше ждать нельзя: человек решит,
+  // что чат сломан, и уйдёт.
+  var steps = [];
+  if (PROVIDER === 'hcaptcha' && SITE_KEY) {
+    steps.push({ kind: 'hcaptcha', key: SITE_KEY });
+    if (SITE_KEY_MAIN) { steps.push({ kind: 'turnstile', key: SITE_KEY_MAIN }); }
+  } else {
+    if (SITE_KEY) { steps.push({ kind: 'turnstile', key: SITE_KEY }); }
+    if (SITE_KEY_2) { steps.push({ kind: 'hcaptcha', key: SITE_KEY_2 }); }
+  }
+  steps.push({ kind: 'self', key: '' });
+
+  var stepAt = -1;
+  var settled = false;
+  var timer = null;
+
+  function escapeButton(text) {
+    showEscape(text);
   }
 
-  // Сторож. Если за восемь секунд виджет не нарисовался и ни одна ошибка не
-  // пришла — человек смотрит в пустоту и не понимает, чего от него хотят.
-  // Молчащая страница хуже честной надписи: по ней нечего и починить.
-  var appeared = false;
-  function alive() { appeared = true; }
-  setTimeout(function () {
-    if (appeared) return;
-    var h = holder && holder.querySelector('iframe');
-    if (h) return;
-    say('Проверка не появилась за 8 секунд.\n\n'
-        + 'Что проверить владельцу чата:\n'
-        + '1. В Cloudflare → Turnstile → виджет → поле Domain должен быть '
-        + location.hostname + '\n'
-        + '2. Ключ на странице и виджет в Cloudflare — одни и те же\n\n'
-        + 'Страница открыта с ' + location.hostname, 'bad');
-  }, 8000);
+  function ownerNote(extra) {
+    hint.innerHTML = (extra || '') +
+      ' <span style="opacity:.7">Владельцу чата: если это повторяется, '
+      + 'поставьте вид проверки «⚡ Одно нажатие (без ключей)» — ему грузить '
+      + 'нечего. Домен площадки должен быть <code>' + location.hostname
+      + '</code>.</span>';
+  }
 
-  window.onCaptchaReady = function () {
-    try {
-      if (PROVIDER === 'hcaptcha') {
-        hcaptcha.render(holder, {
-          sitekey: SITE_KEY, theme: (tg && tg.colorScheme) || 'light',
-          callback: done, 'error-callback': failed, 'expired-callback': failed
-        });
-        alive();
-      } else {
-        turnstile.render(holder, {
-          sitekey: SITE_KEY, theme: (tg && tg.colorScheme) || 'auto',
-          callback: done, 'error-callback': failed, 'expired-callback': failed,
-          'before-interactive-callback': alive, 'after-interactive-callback': alive
-        });
-        alive();
-      }
-    } catch (e) {
-      say('Не удалось загрузить проверку: ' + e.message, 'bad');
+  // Ступень не ответила — идём к следующей.
+  function nextStep(why) {
+    if (settled) { return; }
+    if (timer) { clearTimeout(timer); timer = null; }
+    holder.innerHTML = '';
+    stepAt += 1;
+    if (stepAt >= steps.length) {
+      settled = true;
+      say('Проверка не загружается.\n\nЭто не ваша вина. Пройдите её у бота '
+          + 'в личных сообщениях — кнопка ниже.', 'bad');
+      escapeButton();
+      ownerNote('Ни одна площадка не ответила.');
+      return;
     }
-  };
+    var step = steps[stepAt];
+    if (step.kind === 'self') {
+      // Последняя ступень: грузить нечего, значит и сломаться нечему.
+      say('Подтвердите, что вы не робот.', '');
+      var mine = document.createElement('button');
+      mine.className = 'back';
+      mine.textContent = '✅ Я не робот';
+      mine.onclick = function () {
+        mine.disabled = true;
+        mine.textContent = 'Проверяем…';
+        settled = true;
+        done('self');
+      };
+      holder.appendChild(mine);
+      escapeButton('💬 Или пройти у бота в личке');
+      ownerNote('Площадки не ответили, проверка идёт без них.');
+      return;
+    }
+    render(step, why);
+  }
 
-  var script = document.createElement('script');
-  script.async = true;
-  script.defer = true;
-  script.src = (PROVIDER === 'hcaptcha')
-    ? 'https://js.hcaptcha.com/1/api.js?onload=onCaptchaReady&render=explicit'
-    : 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onCaptchaReady&render=explicit';
-  script.onerror = function () {
-    say('Проверка не загрузилась — похоже, нет связи. Попробуйте ещё раз.', 'bad');
-  };
-  document.head.appendChild(script);
+  function render(step, why) {
+    var ready = 'onCaptchaReady' + stepAt;
+    window[ready] = function () {
+      try {
+        var api = (step.kind === 'hcaptcha') ? window.hcaptcha : window.turnstile;
+        if (!api) { nextStep('нет объекта площадки'); return; }
+        api.render(holder, {
+          sitekey: step.key,
+          theme: (tg && tg.colorScheme) || (step.kind === 'hcaptcha' ? 'light' : 'auto'),
+          callback: function (token) { settled = true; done(token); },
+          'error-callback': function (code) { nextStep('ошибка ' + code); },
+          'expired-callback': function () { nextStep('истекла'); }
+        });
+      } catch (e) {
+        nextStep('исключение');
+      }
+    };
+    var script = document.createElement('script');
+    script.async = true;
+    script.defer = true;
+    script.src = (step.kind === 'hcaptcha')
+      ? 'https://js.hcaptcha.com/1/api.js?onload=' + ready + '&render=explicit'
+      : 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=' + ready + '&render=explicit';
+    script.onerror = function () { nextStep('скрипт не загрузился'); };
+    document.head.appendChild(script);
+    // Сторож на ступень: виджет мог и не позвать ни одного обработчика.
+    timer = setTimeout(function () {
+      if (settled) { return; }
+      if (holder.querySelector('iframe')) { return; }
+      nextStep('молчит восемь секунд');
+    }, 8000);
+  }
+
+  if (selfOnly) {
+    stepAt = steps.length - 2;   // сразу на «свою кнопку»
+  }
+  nextStep('');
 })();
 </script>
 </body>
