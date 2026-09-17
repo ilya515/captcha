@@ -60,7 +60,12 @@
     color: var(--tg-theme-hint-color, var(--muted));
   }
   .box {
-    display: flex; justify-content: center; min-height: 78px;
+    /* Столбиком. Раньше здесь был ряд, и когда к виджету добавились кнопка
+       и пояснение, они встали В ТРИ КОЛОНКИ — текст сжался в лапшу по два
+       слова в строку. Всё, что сюда кладётся, должно идти сверху вниз и во
+       всю ширину. */
+    display: flex; flex-direction: column; align-items: stretch;
+    justify-content: center; min-height: 78px;
     margin-bottom: 20px;
   }
   .state { font-size: 15px; min-height: 24px; }
@@ -76,7 +81,7 @@
     padding: 1px 5px; font-size: 13px;
   }
   .setup b { display: block; margin-bottom: 8px; }
-  .back { display: block; margin: 18px auto 0; max-width: 320px; padding: 14px 18px;
+  .back { display: block; width: 100%; margin: 14px auto 0; max-width: 320px; padding: 14px 18px;
           border-radius: 12px; background: #2ea6ff; color: #fff; font-weight: 600;
           text-align: center; text-decoration: none; }
 </style>
@@ -167,11 +172,7 @@ var BOT_NAME = 'moderatosina_bot';
     link.href = 'https://t.me/' + name + (cid ? '?start=capok_' + cid : '');
     link.textContent = label || ('💬 Перейти к боту @' + name + ' в личку');
     box.appendChild(link);
-    var tail = document.createElement('div');
-    tail.className = 'setup';
-    tail.textContent = 'Нажмите кнопку выше — бот примет проверку в личных '
-        + 'сообщениях, и вы попадёте в чат. Заявка при этом никуда не делась.';
-    box.appendChild(tail);
+    hint.textContent = 'Заявка на месте — бот закончит проверку в личке.';
   }
 
   // Ключ не подставили — объясняем это здесь, а не оставляем пустой экран:
@@ -249,7 +250,9 @@ var BOT_NAME = 'moderatosina_bot';
     var req = new XMLHttpRequest();
     req.open('POST', api.replace(/\/+$/, '') + '/jr/done', true);
     req.setRequestHeader('Content-Type', 'application/json');
-    req.timeout = 15000;
+    // Шесть секунд, не пятнадцать: если бот не ответил за это время,
+    // ждать дальше бессмысленно — есть второй путь, и он быстрее.
+    req.timeout = 6000;
     req.onload = function () {
       var ok = false, error = '';
       try {
@@ -268,27 +271,38 @@ var BOT_NAME = 'moderatosina_bot';
       } else if (error === 'captcha') {
         say('Проверка не пройдена. Попробуйте ещё раз.', 'bad');
       } else {
-        say('Ответ не принят' + (error ? ' (' + error + ')' : '') +
-            '. Напишите администратору чата.', 'bad');
+        goToBot();
       }
     };
-    req.onerror = function () {
-      // Две разные беды выглядят одинаково, а лечатся по-разному: бот не
-      // запущен (или туннель умер) — и браузер не пустил запрос из-за
-      // разрешений. Показываем адрес: по нему владелец сразу поймёт, какая.
-      say('Не достучались до бота.\n\nАдрес: ' + api +
-          '\n\nВладельцу чата: откройте этот адрес с /jr/ping в браузере. '
-          + 'Пусто — туннель не работает, бот не получил ответ. '
-          + 'Заявка осталась, администратор её увидит.', 'bad');
-    };
-    req.ontimeout = function () {
-      say('Бот не ответил за 15 секунд — заявка осталась, '
-          + 'администратор её увидит.', 'bad');
+    // Не достучались до бота — не показываем человеку простыню про туннель,
+    // а доводим его до чата вторым путём: открываем бота с тем же номером
+    // проверки. Там она засчитывается без всякого туннеля.
+    req.onerror = req.ontimeout = function () {
+      goToBot();
     };
     try {
       req.send(JSON.stringify({ jr: jr, token: token, initData: initData }));
     } catch (e) {
-      say('Отправить ответ не вышло. Напишите администратору чата.', 'bad');
+      goToBot();
+    }
+  }
+
+  // Второй путь до чата: открыть бота с номером этой же проверки. Работает
+  // всегда — тут нет ни площадок, ни туннеля, только Telegram.
+  function goToBot() {
+    var name = botName || BOT_NAME;
+    if (!name || !cid) {
+      say('Проверка не дошла до бота. Заявка осталась — '
+          + 'администратор её увидит.', 'bad');
+      return;
+    }
+    var link = 'https://t.me/' + name + '?start=capok_' + cid;
+    say('Заканчиваем в боте — одно нажатие.', '');
+    showEscape('💬 Завершить проверку у бота');
+    if (tg && tg.openTelegramLink) {
+      setTimeout(function () { try { tg.openTelegramLink(link); } catch (e) {} }, 500);
+    } else {
+      setTimeout(function () { location.href = link; }, 500);
     }
   }
 
@@ -361,12 +375,24 @@ var BOT_NAME = 'moderatosina_bot';
     showEscape(text);
   }
 
+  // Человеку — одна короткая строка. Разбор для владельца прячем под кат:
+  // простыня про домены и ключи посреди проверки пугает и ничего не решает.
   function ownerNote(extra) {
-    hint.innerHTML = (extra || '') +
-      ' <span style="opacity:.7">Владельцу чата: если это повторяется, '
-      + 'поставьте вид проверки «⚡ Одно нажатие (без ключей)» — ему грузить '
-      + 'нечего. Домен площадки должен быть <code>' + location.hostname
-      + '</code>.</span>';
+    hint.innerHTML = (extra || '')
+      + ' <a href="#" id="whynot" style="opacity:.6">почему?</a>'
+      + '<span id="whytext" style="display:none;opacity:.7"><br><br>'
+      + 'Владельцу чата: поставьте вид проверки «⚡ Одно нажатие (без ключей)» — '
+      + 'ему грузить нечего. Домен площадки должен быть <code>'
+      + location.hostname + '</code>.</span>';
+    var a = document.getElementById('whynot');
+    if (a) {
+      a.onclick = function (e) {
+        e.preventDefault();
+        var t = document.getElementById('whytext');
+        if (t) { t.style.display = 'inline'; }
+        a.style.display = 'none';
+      };
+    }
   }
 
   // Ступень не ответила — идём к следующей.
