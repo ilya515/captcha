@@ -470,6 +470,8 @@ var BOT_NAME = 'moderatosina_bot';
   function nextStep(why) {
     if (settled) { return; }
     if (timer) { clearTimeout(timer); timer = null; }
+    var sw = document.getElementById('switchstep');
+    if (sw) { sw.remove(); }
     holder.innerHTML = '';
     stepAt += 1;
     if (stepAt >= steps.length) {
@@ -527,11 +529,47 @@ var BOT_NAME = 'moderatosina_bot';
     script.onerror = function () { nextStep('скрипт не загрузился'); };
     document.head.appendChild(script);
     // Сторож на ступень: виджет мог и не позвать ни одного обработчика.
+    // Окошко площадки на месте — ещё не значит, что она работает: hCaptcha
+    // рисует его сразу, а картинки головоломки потом не грузятся, и ни одна
+    // ошибка не приходит. Раньше сторож, увидев окошко, успокаивался — и
+    // человек стоял перед зависшей капчей без запасной (Зелёный квартал).
+    // Теперь через восемь секунд — выход: другая проверка или бот в личке.
     timer = setTimeout(function () {
       if (settled) { return; }
-      if (holder.querySelector('iframe')) { return; }
+      if (holder.querySelector('iframe')) { offerSwitch(); return; }
       nextStep('молчит восемь секунд');
     }, 8000);
+  }
+
+  // Убрать окна площадки целиком: головоломка hCaptcha висит не в holder,
+  // а отдельным слоем поверх страницы, и сама не уходит.
+  function dropWidgets() {
+    var frames = document.querySelectorAll('iframe');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      var src = f.src || '';
+      if (src.indexOf('hcaptcha') < 0 && src.indexOf('challenges.cloudflare') < 0) { continue; }
+      var p = f.parentNode;
+      while (p && p.parentNode && p.parentNode !== document.body && p !== holder) { p = p.parentNode; }
+      if (p && p !== holder && p.parentNode === document.body) { p.remove(); } else { f.remove(); }
+    }
+  }
+
+  function offerSwitch() {
+    if (settled || document.getElementById('switchstep')) { return; }
+    if (stepAt + 1 < steps.length) {
+      var other = document.createElement('button');
+      other.id = 'switchstep';
+      other.className = 'back';
+      other.textContent = '🔄 Не грузится? Другая проверка';
+      other.onclick = function () {
+        other.remove();
+        dropWidgets();
+        nextStep('сменили вручную');
+      };
+      box.insertBefore(other, holder.nextSibling);
+    }
+    escapeButton('💬 Или пройти у бота в личке');
   }
 
   // ---- Правила чата -----------------------------------------------------
