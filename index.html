@@ -28,7 +28,26 @@
   //    не включится, первый будет работать как работал.
   var SITE_KEY_2 = '74de4884-3aea-4804-9220-a5cc2e6e4cbc';
   var PROVIDER_2 = 'hcaptcha';
+  // 4. Сервер панели бота (MINIAPP_URL в .env). Окно «🔡 Буквы и цифры»
+  //    рисует картинку и сверяет ответ там, а не здесь.
+  var PANEL_URL = 'https://app.compkru.ru';
   // ───────────────────────────────────────────────────────────────────
+</script>
+<script>
+  // Окно «🔡 Буквы и цифры»: кнопка в чате открывает это приложение с
+  // меткой «L<номер проверки>». Уводим на сервер панели вместе с подписью
+  // Telegram (она в адресе после «#») — дальше картинка и клавиатура там.
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var sp = q.get('tgWebAppStartParam') || '';
+    if (!sp) {
+      var h = new URLSearchParams(location.hash.replace(/^#/, ''));
+      sp = h.get('tgWebAppStartParam') || '';
+    }
+    if (/^L\d+$/.test(sp) && PANEL_URL) {
+      location.replace(PANEL_URL.replace(/\/$/, '') + '/cap/?k=' + sp + location.hash);
+    }
+  })();
 </script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
